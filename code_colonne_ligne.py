@@ -87,9 +87,7 @@ def analyser_fichier_donnees_dynamique(chemin_fichier):
         print("Aucune donnée valide n'a été lue après l'en-tête.")
         return None
 
-    # Les dimensions de la matrice NumPy seront (nombre_de_lignes, nombre_de_colonnes, ...)
-    # Le nombre de lignes est déterminé par max_observed_row_idx
-    # Le nombre de colonnes est déterminé par max_observed_col_idx
+
     nombre_final_lignes_matrice = max_observed_row_idx + 1
     nombre_final_colonnes_matrice = max_observed_col_idx + 1
     
@@ -110,8 +108,7 @@ def analyser_fichier_donnees_dynamique(chemin_fichier):
         
         lignes_remplies_matrice = 0
         for col_f, row_f, forme_onde_data in donnees_brutes:
-            # Important: lors du remplissage de donnees_matrice[idx_ligne, idx_colonne, :],
-            # utiliser row_f comme idx_ligne et col_f comme idx_colonne.
+
             if 0 <= row_f < nombre_final_lignes_matrice and 0 <= col_f < nombre_final_colonnes_matrice:
                 donnees_matrice[row_f, col_f, :] = forme_onde_data
                 lignes_remplies_matrice +=1
@@ -198,4 +195,5 @@ if __name__ == "__main__":
             print("L'analyse a produit une matrice vide (taille 0). "
                   "Vérifiez les messages précédents et le fichier de données.")
     else:
+
         print("Impossible d'afficher la matrice car les données n'ont pas pu être chargées ou traitées.")
