@@ -1,28 +1,26 @@
-# Thursday, April 24, 2025 at 3:30:50 PM CEST 
-# Location: Marseille, Provence-Alpes-Côte d'Azur, France
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 import os
 import sys
-import traceback # Added for better error detail
+import traceback 
 
 # --- Constantes et Configuration ---
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-# IMPORTANT: Update this path to your actual data file
+
 FICHIER_DATA = os.path.join(script_dir, 'C:/Users/sword/Desktop/Données US/Pre╠ü csan-CH1.csv')
 print(f"Chemin fichier de données utilisé: {FICHIER_DATA}")
 
 CRITERE_BORDURE = 0.95
 DELAI_ANIMATION_MS = 150 # Speed for the "film" playback (milliseconds)
 HEADER_END_MARKER = "______Output Data (Format for each row: index Number, scanning number, Waveform)______"
-EXPECTED_SCANS_PER_MOMENT = 70 # Defined based on user input (0-69)
+EXPECTED_SCANS_PER_MOMENT = 70 
 
-# --- Fonctions de Nettoyage (inchangées) ---
+# --- Fonctions de Nettoyage ---
 def imputer_nan_par_moyenne_voisins(matrix):
-    # (Code from previous response - handles NaN imputation)
+
     if matrix.size == 0: return matrix
     rows, cols = matrix.shape
     matrice_imputee = matrix.copy()
@@ -41,7 +39,7 @@ def imputer_nan_par_moyenne_voisins(matrix):
     return matrice_imputee
 
 def nettoyer_matrice(matrix_brute):
-    # (Code from previous response - removes sparse borders)
+
     if matrix_brute.size == 0: return matrix_brute
     mat = matrix_brute.copy()
     while True:
@@ -194,10 +192,7 @@ def charger_matrices_par_moment(filepath, header_marker=HEADER_END_MARKER):
                 total_matrices_processed += 1
             else:
                  total_matrices_failed += 1
-                 # Add placeholder if needed, e.g. None or empty array?
-                 # matrices_for_this_moment_dict[scan_idx] = None
 
-        # Convert dict to list, ordered by scan_idx, potentially containing None
         matrices_list = []
         found_valid_matrix = False
         for i in range(EXPECTED_SCANS_PER_MOMENT): # Iterate 0 to 69
@@ -206,17 +201,16 @@ def charger_matrices_par_moment(filepath, header_marker=HEADER_END_MARKER):
                 matrices_list.append(matrix)
                 found_valid_matrix = True
             else:
-                # Add a placeholder for missing/failed scans
-                matrices_list.append(np.array([[np.nan]])) # Use a single NaN pixel as placeholder
-                if i in sorted_scan_indices: # It failed processing
+
+                matrices_list.append(np.array([[np.nan]])) 
+                if i in sorted_scan_indices: 
                      print(f"  Alerte: Placeholder ajouté pour échec traitement Moment={moment_idx}, Scan={i}.", file=sys.stderr)
-                # else: # It was missing entirely
-                #      print(f"  Alerte: Placeholder ajouté pour Scan={i} manquant dans Moment={moment_idx}.", file=sys.stderr)
 
 
-        if found_valid_matrix: # Only add moment if at least one matrix was valid
+
+        if found_valid_matrix: 
             final_grouped_matrices[moment_idx] = matrices_list
-            # print(f"  Moment Index {moment_idx}: {processed_count_this_moment}/{num_scans_found} scans traités avec succès.")
+
         else:
             print(f"  Alerte: Aucune matrice valide générée pour Moment Index {moment_idx}.", file=sys.stderr)
 
@@ -245,7 +239,7 @@ class VisualiseurMoments:
 
         # Initialisation des index
         self.current_moment_slider_idx = 0
-        self.update_current_moment_data() # Sets current_moment_actual_idx, matrices, num_scans
+        self.update_current_moment_data() 
         self.current_scan_idx = 0
 
         # Initialisation animation
@@ -254,7 +248,7 @@ class VisualiseurMoments:
 
         # Calculer vmin/vmax globalement
         self.calculate_global_vmin_vmax()
-        if self.vmin is None: # Check if vmin/vmax calculation failed
+        if self.vmin is None: 
              self._show_error_figure("Impossible de calculer vmin/vmax")
              return
 
@@ -269,7 +263,7 @@ class VisualiseurMoments:
         self.cbar.set_label('Valeurs')
         self.update_title()
 
-        # --- Widgets ---
+
         axcolor = 'lightgoldenrodyellow'
 
         # Slider 1: Sélection du Moment Index
@@ -325,11 +319,11 @@ class VisualiseurMoments:
         for i in range(self.num_scans_current_moment):
             check_idx = (start_scan_idx + i) % self.num_scans_current_moment
             matrix = self.current_moment_matrices[check_idx]
-            # Vérifie si ce n'est pas le placeholder NaN 1x1 et a une taille > 0
+
             if matrix.size > 0 and not (matrix.shape == (1, 1) and np.isnan(matrix[0, 0])):
                 return matrix, check_idx # Retourne la matrice valide et son index
 
-        # Si aucune matrice valide n'est trouvée (que des placeholders)
+
         return np.array([[np.nan]]), start_scan_idx # Retourne placeholder
 
     def update_current_moment_data(self):
@@ -502,5 +496,6 @@ if __name__ == "__main__":
          visualiseur = VisualiseurMoments(donnees_groupees)
     else:
          print("Aucune donnée Moment/Scan n'a été chargée, le visualiseur ne sera pas lancé.")
+
 
     print("Fin du script.")
