@@ -1,0 +1,314 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from scipy import ndimage
+from scipy.interpolate import griddata
+
+# =============================================================================
+# FONCTIONS UTILITAIRES 
+# =============================================================================
+
+def charger_matrice_depuis_fichier_texte_v2(chemin_fichier):
+    """Charge une matrice de données à partir d'un format de fichier texte spécifique."""
+    nom_en_tete_specifique = "______Output Data (col: scan axis, row: index axis)______"
+    try:
+        with open(chemin_fichier, 'r') as f:
+            lignes = [ligne.strip() for ligne in f.readlines()]
+        idx_en_tete_specifique = next((i for i, ligne in enumerate(lignes) if nom_en_tete_specifique in ligne), -1)
+        if idx_en_tete_specifique == -1:
+            print(f"Avertissement : En-tête non trouvé dans {chemin_fichier}.")
+            return np.array([])
+
+        ligne_x_coords = lignes[idx_en_tete_specifique + 1]
+        valeurs_ligne_x = ligne_x_coords.split(',')
+        x_coords_parsed = [float(val) for val in valeurs_ligne_x[1:] if val.strip()]
+        nombre_colonnes_attendu = len(x_coords_parsed)
+
+        matrice_extraite = []
+        for ligne_brute in lignes[idx_en_tete_specifique + 2:]:
+            if not ligne_brute.strip():
+                continue
+            valeurs_str = ligne_brute.split(',')[1:]
+            ligne = [float(val) if val else np.nan for val in valeurs_str[:nombre_colonnes_attendu]]
+            ligne += [np.nan] * (nombre_colonnes_attendu - len(ligne))
+            matrice_extraite.append(ligne)
+        return np.array(matrice_extraite)
+    except Exception as e:
+        print(f"Erreur lecture fichier {chemin_fichier} : {e}")
+        return np.array([])
+
+# =============================================================================
+# ANALYSE INFRA-ROUGE 
+# =============================================================================
+
+def _charger_et_preparer_df_ir(txt_file):
+    """Charge et nettoie les données brutes du fichier texte IR."""
+    if not os.path.exists(txt_file):
+        print(f"Erreur : {txt_file} introuvable.")
+        return None
+    try:
+        with open(txt_file, 'r') as f:
+            lines = f.readlines()[8:]
+        data_lines = []
+        for line in lines:
+            parts = line.strip().split()
+            row = [''] * 12
+            if len(parts) == 12: row[0:12] = parts
+            elif len(parts) == 9: row[3:12] = parts
+            elif len(parts) == 6: row[6:12] = parts
+            elif len(parts) == 3: row[9:12] = parts
+            elif len(parts) > 12: row = parts[:12]
+            data_lines.append(row)
+        
+        expected_headers = [
+            'X (R1)', 'Y (R1)', 'T (R1, °C)',
+            'X (T2R1)', 'Y (T2R1)', 'T (T2R1, °C)',
+            'X (T3R1)', 'Y (T3R1)', 'T (T3R1, °C)',
+            'X (T4R1)', 'Y (T4R1)', 'T (T4R1, °C)'
+        ]
+        numeric_data = [[float(val.replace(',', '.')) if val else 0.0 for val in row] for row in data_lines]
+        df = pd.DataFrame(numeric_data, columns=expected_headers)
+        return df
+    except Exception as e:
+        print(f"Erreur lors de la lecture des données IR : {e}")
+        return None
+
+def charger_donnees_ir_par_tuile(txt_file, resolution=100):
+    """Charge les données IR et les sépare en tuiles interpolées."""
+    print("Chargement des données IR par tuile...")
+    df = _charger_et_preparer_df_ir(txt_file)
+    if df is None:
+        return {}
+
+    tiles_def = {
+        'Tuile 1 (R1 + T2R1)': ['X (R1)', 'Y (R1)', 'T (R1, °C)', 'X (T2R1)', 'Y (T2R1)', 'T (T2R1, °C)'],
+        'Tuile 2 (T3R1)': ['X (T3R1)', 'Y (T3R1)', 'T (T3R1, °C)'],
+        'Tuile 3 (T4R1)': ['X (T4R1)', 'Y (T4R1)', 'T (T4R1, °C)']
+    }
+
+    seuil = 10
+    resultats = {}
+    for nom, cols in tiles_def.items():
+        if "T2R1" in nom:
+            x = np.hstack((df[cols[0]], df[cols[3]]))
+            y = np.hstack((df[cols[1]], df[cols[4]]))
+            t = np.hstack((df[cols[2]], df[cols[5]]))
+        else:
+            x, y, t = df[cols[0]].values, df[cols[1]].values, df[cols[2]].values
+        mask = (x > seuil) & (y > seuil)
+        x, y, t = x[mask], y[mask], t[mask]
+        if x.size == 0:
+            continue
+        x_min, x_max, y_min, y_max = x.min(), x.max(), y.min(), y.max()
+        Xg, Yg = np.meshgrid(np.linspace(x_min, x_max, resolution), np.linspace(y_min, y_max, resolution))
+        Z = griddata((x, y), t, (Xg, Yg), method='linear', fill_value=t.min())
+        resultats[nom] = {
+            'Z': Z, 'X': Xg, 'Y': Yg,
+            'extent': (x_min, x_max, y_min, y_max),
+            'Tmin': t.min(), 'Tmax': t.max()
+        }
+    return resultats
+
+def afficher_tuile_ir(data, titre):
+    """Affiche une seule carte de température IR."""
+    Z, X, Y, extent = data['Z'], data['X'], data['Y'], data['extent']
+    levels = np.linspace(data['Tmin'], data['Tmax'], 15)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    im = ax.imshow(Z, extent=extent, origin='lower', cmap='inferno',
+                   vmin=data['Tmin'], vmax=data['Tmax'], aspect='auto')
+    ax.contour(X, Y, Z, levels=levels, colors='white', linewidths=0.5)
+    ax.set_title(titre)
+    fig.colorbar(im, ax=ax, label='Température (°C)')
+    plt.tight_layout()
+    plt.show()
+
+# =============================================================================
+# FUSION US + IR 
+# =============================================================================
+
+def dessiner_analyse_pour_une_tuile(axes_col, m_us_corrige, data_ir, nom_partie):
+    """
+    Dessine les 4 graphiques d'analyse (US, IR, Fusion, Divergence) pour une seule tuile
+    sur une colonne d'axes fournie.
+    (Version avec le calcul de seuil IR robuste restauré)
+    """
+    m_us = m_us_corrige.astype(float)
+    m_ir = data_ir['Z']
+    
+    zoom_factors = (m_us.shape[0] / m_ir.shape[0], m_us.shape[1] / m_ir.shape[1])
+    m_ir_resized = ndimage.zoom(m_ir, zoom_factors, order=1)
+    m_ir_resized = np.flipud(m_ir_resized)
+
+    # --- Calcul des seuils ---
+    seuil_us = np.nanpercentile(m_us, 90)
+    
+    # méthode de calcul robuste pour le seuil IR
+    ir_values_clean = m_ir_resized[~np.isnan(m_ir_resized)]
+    if ir_values_clean.size > 0:
+        # Filtrage des valeurs extrêmes avant le calcul
+        lower_bound = np.percentile(ir_values_clean, 15)
+        upper_bound = np.percentile(ir_values_clean, 85)
+        ir_trimmed = ir_values_clean[(ir_values_clean >= lower_bound) & (ir_values_clean <= upper_bound)]
+        
+        if ir_trimmed.size > 0:
+            mean_ir_trimmed = np.mean(ir_trimmed)
+            std_ir_trimmed = np.std(ir_trimmed)
+            seuil_ir = mean_ir_trimmed + 3 * std_ir_trimmed
+        else:
+            # Cas où le filtrage ne laisse aucune donnée 
+            seuil_ir = np.mean(ir_values_clean) + 3 * np.std(ir_values_clean)
+    else:
+        seuil_ir = np.inf
+
+    
+    masque_us = m_us > seuil_us
+    masque_ir = m_ir_resized > seuil_ir
+    fusion = np.logical_and(masque_us, masque_ir)
+    masque_us_exclusif = np.logical_and(masque_us, ~masque_ir)
+    masque_ir_exclusif = np.logical_and(masque_ir, ~masque_us)
+
+    axes_col[0].set_title(nom_partie, fontsize=14, fontweight='bold')
+    
+    im_us = axes_col[0].imshow(m_us, cmap='viridis', aspect='auto')
+    axes_col[0].contour(masque_us, colors='red', levels=[0.5], linewidths=0.8)
+    
+    im_ir = axes_col[1].imshow(m_ir_resized, cmap='inferno', aspect='auto')
+    axes_col[1].contour(masque_ir, colors='cyan', levels=[0.5], linewidths=0.8)
+
+    axes_col[2].imshow(m_us, cmap='gray', aspect='auto')
+    axes_col[2].imshow(np.ma.masked_where(~fusion, fusion), cmap='cool', alpha=0.8)
+    
+    axes_col[3].imshow(m_us, cmap='gray', aspect='auto', alpha=0.6)
+    axes_col[3].imshow(np.ma.masked_where(~masque_us_exclusif, masque_us_exclusif), cmap='winter', alpha=0.8)
+    axes_col[3].imshow(np.ma.masked_where(~masque_ir_exclusif, masque_ir_exclusif), cmap='autumn', alpha=0.8)
+    
+    for ax in axes_col:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    return im_us, im_ir
+# =============================================================================
+# SCRIPT PRINCIPAL ET MENU 
+# =============================================================================
+
+# --- Configurez vos chemins ici ---
+BASE_PATH_POSTHHF2 = "" # Mettez votre chemin de base ici
+FICHIER_IR_TXT = 'DtRef-GRADI-CSAM1_PostHHF.TXT' # Mettez le chemin de votre fichier IR ici
+
+CHEMINS_US = {
+    "Partie 1": {"post2": os.path.join(BASE_PATH_POSTHHF2, "MB1-post.csv")},
+    "Partie 2": {"post2": os.path.join(BASE_PATH_POSTHHF2, "MB2-post.csv")},
+    "Partie 3": {"post2": os.path.join(BASE_PATH_POSTHHF2, "MB3-post.csv")}
+}
+
+def lancer_analyse_temperature_seule():
+    """Lance l'affichage des cartes de température IR, tuile par tuile."""
+    print("\n--- Lancement de l'analyse de température par tuile ---")
+    resultats_tuiles = charger_donnees_ir_par_tuile(FICHIER_IR_TXT)
+    if not resultats_tuiles:
+        print("Aucune tuile IR valide n'a été extraite.")
+        return
+    for nom_tuile, data in resultats_tuiles.items():
+        afficher_tuile_ir(data, nom_tuile)
+    print("\n--- Analyse de température par tuile terminée. ---")
+
+def lancer_analyse_fusionnee_par_tuile():
+    """
+    Lance l'analyse de fusion et affiche les résultats des 3 tuiles sur une seule
+    figure comparative (grille de 4x3).
+    """
+    print("\n--- Lancement de la fusion US/IR (vue comparative) ---")
+    
+    ir_tiles = charger_donnees_ir_par_tuile(FICHIER_IR_TXT)
+    if not ir_tiles:
+        print("Échec du chargement des données IR. Annulation.")
+        return
+
+    us_items = list(CHEMINS_US.items())
+    ir_items = list(ir_tiles.items())
+
+    if len(us_items) != len(ir_items):
+        print(f"Erreur : Le nombre de matrices US ({len(us_items)}) ne correspond pas au nombre de tuiles IR ({len(ir_items)}).")
+        return
+        
+    fig, axes = plt.subplots(4, 3, figsize=(18, 20))
+    fig.suptitle("Analyse Fusionnée US/IR - Vue Comparative des Tuiles", fontsize=20, fontweight='bold')
+
+    last_im_us, last_im_ir = None, None
+
+    for col_idx, ((nom_partie, fichiers), (nom_tuile, data_ir)) in enumerate(zip(us_items, ir_items)):
+        print(f"\n--- Traitement de la colonne {col_idx + 1}: {nom_partie} ---")
+        
+        chemin_fichier_us = fichiers["post2"]
+        if not os.path.exists(chemin_fichier_us):
+            print(f"   -> Fichier US non trouvé : {chemin_fichier_us}. Colonne vide.")
+            axes_col = axes[:, col_idx]
+            for ax in axes_col:
+                ax.text(0.5, 0.5, 'Données US\nmanquantes', ha='center', va='center', fontsize=12)
+                ax.set_xticks([])
+                ax.set_yticks([])
+            continue
+            
+        m_post2 = charger_matrice_depuis_fichier_texte_v2(chemin_fichier_us)
+        if m_post2.size == 0:
+            print(f"   -> Aucune donnée US valide pour {nom_partie}. Colonne vide.")
+            continue
+        
+        m_post2_corrige = m_post2.copy()
+        if nom_partie == "Partie 1":
+            print("   -> Correction US Matrice 1 : np.flip + np.rot90")
+            m_post2_corrige = np.rot90(np.flip(m_post2))
+        elif nom_partie == "Partie 2":
+            print("   -> Correction US Matrice 2 : np.rot90")
+            m_post2_corrige = np.rot90(m_post2)
+        elif nom_partie == "Partie 3":
+            print("   -> Correction US Matrice 3 : np.flip(axis=1) + np.rot90")
+            m_post2_corrige = np.flip(np.rot90(m_post2), axis=1)
+
+        axes_col = axes[:, col_idx]
+        last_im_us, last_im_ir = dessiner_analyse_pour_une_tuile(axes_col, m_post2_corrige, data_ir, nom_partie)
+    
+    axes[0, 0].set_ylabel("Ultrasons (US)", fontsize=14, fontweight='bold')
+    axes[1, 0].set_ylabel("Infrarouge (IR)", fontsize=14, fontweight='bold')
+    axes[2, 0].set_ylabel("Fusion (US & IR)", fontsize=14, fontweight='bold')
+    axes[3, 0].set_ylabel("Divergence", fontsize=14, fontweight='bold')
+    
+    patch_us = mpatches.Patch(color='blue', label='Risque US Seul')
+    patch_ir = mpatches.Patch(color='red', label='Risque IR Seul')
+    axes[3, -1].legend(handles=[patch_us, patch_ir], loc='lower right', fontsize='small')
+
+    plt.tight_layout(rect=[0, 0, 0.95, 0.96])
+
+    if last_im_us and last_im_ir:
+        cbar_ax_us = fig.add_axes([0.96, 0.73, 0.02, 0.2])
+        fig.colorbar(last_im_us, cax=cbar_ax_us, label='Amplitude US')
+
+        cbar_ax_ir = fig.add_axes([0.96, 0.50, 0.02, 0.2])
+        fig.colorbar(last_im_ir, cax=cbar_ax_ir, label='Température (°C)')
+
+    print("\n--- Affichage de la vue comparative. Fermez la fenêtre pour continuer. ---")
+    plt.show()
+    print("\n--- Fin de l'analyse fusionnée. ---")
+
+
+if __name__ == "__main__":
+    while True:
+        print("\n" + "="*60)
+        print("MENU PRINCIPAL")
+        print("="*60)
+        print("1. Afficher les cartes de température IR (par tuile)")
+        print("2. Lancer la fusion US & IR (analyse comparative)")
+        print("3. Quitter")
+
+        choix = input("\nVotre choix : ")
+        if choix == '1':
+            lancer_analyse_temperature_seule()
+        elif choix == '2':
+            lancer_analyse_fusionnee_par_tuile()
+        elif choix == '3':
+            print("Fin du programme.")
+            break
+        else:
+            print("Choix invalide. Veuillez réessayer.")

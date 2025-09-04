@@ -1,0 +1,255 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.fft import fft, ifft, fftfreq
+from scipy.signal import hilbert
+from matplotlib.widgets import RectangleSelector
+from io import StringIO
+
+# --- Data Loading and Pre-processing ---
+FNAME = 'C1--part3hautgauche--00000.csv'
+META_LINES = 4
+
+# Read metadata and determine separator
+with open(FNAME, 'r') as f:
+    sample = [next(f) for _ in range(META_LINES + 1)]
+header = sample[META_LINES]
+sep = ';' if header.count(';') > header.count(',') else ','
+
+# Load data, handling different decimal separators
+if sep == ';':
+    with open(FNAME, 'r') as f_in:
+        lines = f_in.readlines()
+    # Replace comma decimal with period only in data lines
+    processed_lines = lines[:META_LINES] + [line.replace(',', '.') for line in lines[META_LINES:]]
+    df = pd.read_csv(
+        StringIO("".join(processed_lines)),
+        skiprows=META_LINES,
+        sep=sep,
+        engine='python'
+    )
+else:
+    df = pd.read_csv(
+        FNAME,
+        skiprows=META_LINES,
+        sep=sep,
+        decimal='.',
+        engine='python'
+    )
+
+# Identify and clean relevant columns
+time_col = next(c for c in df.columns if 'Time' in c)
+amp_col = next(c for c in df.columns if 'Ampl' in c or 'Amp' in c)
+
+for col in (time_col, amp_col):
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+df.dropna(subset=[time_col, amp_col], inplace=True)
+df.sort_values(by=time_col, inplace=True)
+
+if len(df) < 2:
+    raise RuntimeError("Moins de 2 points valides après nettoyage.")
+
+# --- Signal Processing Functions ---
+def process_signal(times, amplitude, fmin, fmax, calculate_raw_fft=False):
+    if len(times) < 2:
+        print("process_signal: Données insuffisantes pour le traitement (moins de 2 points).")
+        return None
+
+    dt = np.diff(times)
+    if np.any(dt <= 0):
+        print("process_signal: Avertissement: Temps non croissants ou dupliqués dans la sélection.")
+        return None
+
+    fs = 1.0 / np.mean(dt)
+
+    # Nyquist frequency check
+    if fs / 2 < fmax:
+        print(f"process_signal: La fréquence d'échantillonnage ({fs/1e6:.3f} MHz) est trop basse pour la fréquence maximale du filtre ({fmax/1e6:.3f} MHz).")
+        fmax = fs / 2 * 0.95  # Keep a small margin
+        print(f"process_signal: fmax ajusté à {fmax/1e6:.3f} MHz.")
+        if fmin >= fmax:
+            print("process_signal: fmin est supérieur ou égal à fmax après ajustement. Aucun filtrage n'est possible.")
+            return None
+
+    amplitude_filtree = fft_bandpass(amplitude, fs, fmin, fmax)
+    enveloppe = np.abs(hilbert(amplitude_filtree))
+    idx_pic = np.argmax(enveloppe)
+    tofs = times[idx_pic]
+    amp_pic = enveloppe[idx_pic]
+    N = len(amplitude_filtree)
+
+    # FFT of the filtered signal
+    yf = fft(amplitude_filtree)
+    xf = fftfreq(N, d=1/fs)[:N//2] / 1e6
+    spec = 2.0/N * np.abs(yf[:N//2])
+
+    # Optional: FFT of the raw (but selected) signal
+    raw_xf, raw_spec = None, None
+    if calculate_raw_fft:
+        N_raw = len(amplitude)
+        yf_raw = fft(amplitude)
+        raw_xf = fftfreq(N_raw, d=1/fs)[:N_raw//2] / 1e6
+        raw_spec = 2.0/N_raw * np.abs(yf_raw[:N_raw//2])
+
+    return {
+        'fs': fs, 'amplitude_filtree': amplitude_filtree, 'enveloppe': enveloppe,
+        'idx_pic': idx_pic, 'tofs': tofs, 'amp_pic': amp_pic,
+        'xf': xf, 'spec': spec, 'raw_xf': raw_xf, 'raw_spec': raw_spec
+    }
+
+def fft_bandpass(sig, fs, fmin, fmax):
+    N = len(sig)
+    if N == 0:
+        return np.array([])
+    SIG = fft(sig)
+    freqs = fftfreq(N, d=1/fs)
+    mask = (np.abs(freqs) >= fmin) & (np.abs(freqs) <= fmax)
+    SIG[~mask] = 0
+    return np.real(ifft(SIG))
+
+# --- Main Script ---
+initial_times = df[time_col].to_numpy()
+initial_amplitude = df[amp_col].to_numpy()
+
+
+# ### MODIFICATION: TWO-STEP NORMALIZATION ###
+
+# STEP 1: Normalize the signal by its global maximum absolute value
+global_max_amp = np.max(np.abs(initial_amplitude))
+if global_max_amp > 0:
+    initial_amplitude /= global_max_amp
+    print(f"Étape 1: Signal normalisé par le maximum global ({global_max_amp:.4f}).")
+else:
+    print("Avertissement: Le maximum global est zéro. Aucune normalisation globale effectuée.")
+
+
+# STEP 2: Re-normalize the already-normalized signal by its local maximum
+norm_t_start = 5.3e-6
+norm_t_end   = 6.0e-6
+norm_mask = (initial_times >= norm_t_start) & (initial_times <= norm_t_end)
+
+local_max_of_normalized_signal = 0
+if np.any(norm_mask):
+    # Find the max value in the window of the ALREADY NORMALIZED signal
+    local_max_of_normalized_signal = np.max(np.abs(initial_amplitude[norm_mask]))
+else:
+    print(f"Avertissement: L'intervalle de temps pour la re-normalisation [{norm_t_start*1e6:.1f}-{norm_t_end*1e6:.1f}] µs ne contient aucun point de données.")
+
+# Normalize the entire (already globally normalized) signal by this new local max
+if local_max_of_normalized_signal > 0:
+    initial_amplitude /= local_max_of_normalized_signal
+    print(f"Étape 2: Signal re-normalisé par le maximum local de la fenêtre ({local_max_of_normalized_signal:.4f}).")
+else:
+    print("Avertissement: Le maximum local pour la re-normalisation est zéro. Aucune deuxième normalisation n'a été appliquée.")
+
+# #######################################################
+
+
+fmin, fmax = 4e6, 2e7
+
+# --- Plotting ---
+fig, axs = plt.subplots(2, 2, figsize=(14, 8))
+plt.subplots_adjust(bottom=0.1, top=0.92)
+
+def update_plots(times, amplitude, is_initial_plot=False):
+    results = process_signal(times, amplitude, fmin, fmax, calculate_raw_fft=is_initial_plot)
+    if results is None:
+        print("Impossible de traiter la sélection : données insuffisantes ou invalides.")
+        if not is_initial_plot:
+            print("Réinitialisation de l'affichage avec le signal complet.")
+            update_plots(initial_times, initial_amplitude, is_initial_plot=True)
+        return
+
+    # Unpack results
+    fs, amplitude_filtree, enveloppe = results['fs'], results['amplitude_filtree'], results['enveloppe']
+    idx_pic, tofs, amp_pic = results['idx_pic'], results['tofs'], results['amp_pic']
+    xf, spec = results['xf'], results['spec']
+    raw_xf, raw_spec = results['raw_xf'], results['raw_spec']
+
+    # Clear all axes
+    for ax in axs.flat:
+        ax.cla()
+
+    # 1. Filtered Signal
+    axs[0,0].plot(times*1e6, amplitude, 'grey', alpha=0.5, label='Brut')
+    axs[0,0].plot(times*1e6, amplitude_filtree, 'b-', label='Filtré FFT')
+    axs[0,0].set(title='1. Filtrage par FFT', xlabel='Temps (µs)', ylabel='Amplitude (normalisée)')
+    # Highlight the normalization window on the initial plot
+    if is_initial_plot:
+        axs[0,0].axvspan(norm_t_start * 1e6, norm_t_end * 1e6, color='orange', alpha=0.2, label='Fenêtre de re-norm.')
+        axs[0,0].legend()
+
+
+    # 2. Envelope and ToF
+    axs[0,1].plot(times*1e6, amplitude_filtree, 'b-', label='Filtré FFT')
+    axs[0,1].plot(times*1e6, enveloppe, 'r-', label='Enveloppe')
+    axs[0,1].plot(tofs*1e6, amp_pic, 'go', label='Pic ToF')
+    axs[0,1].set(title='2. Enveloppe & ToF', xlabel='Temps (µs)')
+    axs[0,1].legend(); axs[0,1].grid()
+
+    # 3. Zoom on Echo
+    span = 5e-6
+    xmin, xmax = (tofs - span)*1e6, (tofs + span)*1e6
+    axs[1,0].plot(times*1e6, amplitude_filtree, 'b-')
+    axs[1,0].plot(times*1e6, enveloppe, 'r-')
+    axs[1,0].plot(tofs*1e6, amp_pic, 'go')
+    axs[1,0].set(title='3. Zoom sur l’écho', xlabel='Temps (µs)', xlim=(xmin, xmax))
+    axs[1,0].grid()
+
+    # 4. FFT Spectrum
+    if raw_xf is not None and raw_spec is not None:
+        axs[1,1].plot(raw_xf, raw_spec, 'k:', alpha=0.6, label='Spectre Brut')
+    axs[1,1].plot(xf, spec, 'm-', label='Spectre Filtré')
+    centre = (fmin + fmax)/2/1e6
+    axs[1,1].axvline(fmin/1e6, color='grey', ls=':', label=f'{fmin/1e6:.1f} MHz min')
+    axs[1,1].axvline(fmax/1e6, color='grey', ls=':', label=f'{fmax/1e6:.1f} MHz max')
+    axs[1,1].axvline(centre, color='red', ls='--', label=f'{centre:.1f} MHz centre')
+    axs[1,1].set(title='4. Spectre FFT', xlabel='Fréquence (MHz)', ylabel='Amplitude')
+    axs[1,1].legend(); axs[1,1].grid()
+
+    # Adjust frequency axis limit
+    max_freq_display = max(0.5, fmax / 1e6 * 1.5)
+    if fs / 2 / 1e6 < max_freq_display:
+        max_freq_display = fs / 2 / 1e6 * 0.98
+    axs[1,1].set(xlim=(0, max_freq_display));
+
+    # Update main title
+    fig.suptitle(
+        f"Analyse de signal ultrasonore (FFT band-pass)\n"
+        f"Fréquence d’échantillonnage : {fs/1e6:.3f} MHz | "
+        f"Temps de vol (ToF) : {tofs*1e6:.2f} µs | "
+        f"Filtre: [{fmin/1e6:.1f} - {fmax/1e6:.1f}] MHz",
+        fontsize=14
+    )
+    plt.draw()
+
+def onselect(eclick, erelease):
+    x1, x2 = sorted([eclick.xdata, erelease.xdata])
+    mask = (initial_times * 1e6 >= x1) & (initial_times * 1e6 <= x2)
+
+    zoomed_times = initial_times[mask]
+    zoomed_amplitude = initial_amplitude[mask]
+
+    if len(zoomed_times) < 2:
+        print("Sélection trop petite ou ne contient pas assez de points de données. Veuillez agrandir votre sélection.")
+        update_plots(initial_times, initial_amplitude, is_initial_plot=True)
+        return
+
+    update_plots(zoomed_times, zoomed_amplitude)
+
+# Initial plot call
+update_plots(initial_times, initial_amplitude, is_initial_plot=True)
+
+# Set up the rectangle selector
+toggle_selector = RectangleSelector(
+    axs[0,0], onselect,
+    useblit=True,
+    button=[1],
+    minspanx=10,
+    minspany=5,
+    spancoords='pixels',
+    interactive=True
+)
+
+plt.show()

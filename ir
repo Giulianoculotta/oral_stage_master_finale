@@ -1,0 +1,145 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.interpolate import griddata
+from matplotlib.colors import Normalize
+
+# Chargement du fichier TXT
+txt_file = 'DtRef-GRADI-CSAM1_PostHHF.TXT'
+
+expected_headers = [
+    'X (R1)', 'Y (R1)', 'T (R1, °C)',
+    'X (T2R1)', 'Y (T2R1)', 'T (T2R1, °C)',
+    'X (T3R1)', 'Y (T3R1)', 'T (T3R1, °C)',
+    'X (T4R1)', 'Y (T4R1)', 'T (T4R1, °C)'
+]
+
+# Lecture et nettoyage du fichier
+with open(txt_file, 'r') as file:
+    lines = file.readlines()
+    data_lines = []
+    for line in lines[8:]:
+        parts = line.strip().split()
+        row = [''] * 12
+        if len(parts) == 12:
+            row[0:12] = parts
+        elif len(parts) == 9:
+            row[3:6] = parts[0:3]
+            row[6:9] = parts[3:6]
+            row[9:12] = parts[6:9]
+        elif len(parts) == 6:
+            row[6:9] = parts[0:3]
+            row[9:12] = parts[3:6]
+        elif len(parts) == 3:
+            row[9:12] = parts[0:3]
+        elif len(parts) > 12:
+            row = parts[:12]
+        data_lines.append(row)
+
+# Conversion en float
+numeric_data = [
+    [float(val.replace(',', '.')) if val else 0.0 for val in row]
+    for row in data_lines
+]
+df = pd.DataFrame(numeric_data, columns=expected_headers)
+
+# Organisation des colonnes
+columns = {
+    'R1': {'X': 'X (R1)', 'Y': 'Y (R1)', 'T': 'T (R1, °C)'},
+    'T2R1': {'X': 'X (T2R1)', 'Y': 'Y (T2R1)', 'T': 'T (T2R1, °C)'},
+    'T3R1': {'X': 'X (T3R1)', 'Y': 'Y (T3R1)', 'T': 'T (T3R1, °C)'},
+    'T4R1': {'X': 'X (T4R1)', 'Y': 'Y (T4R1)', 'T': 'T (T4R1, °C)'}
+}
+
+# Extraction des données par tuile
+data = {
+    tile: {
+        coord: df[columns[tile][coord]].values
+        for coord in ['X', 'Y', 'T']
+    }
+    for tile in columns
+}
+
+# Sauvegarde des CSV individuels
+for tile in data:
+    pd.DataFrame({
+        'X': data[tile]['X'],
+        'Y': data[tile]['Y'],
+        'T': data[tile]['T']
+    }).to_csv(f'{tile}_data.csv', index=False)
+
+# Combinaison partielle des tuiles
+x1 = np.hstack((data['R1']['X'], data['T2R1']['X']))
+y1 = np.hstack((data['R1']['Y'], data['T2R1']['Y']))
+t1 = np.hstack((data['R1']['T'], data['T2R1']['T']))
+x2, y2, t2 = data['T3R1']['X'], data['T3R1']['Y'], data['T3R1']['T']
+x3, y3, t3 = data['T4R1']['X'], data['T4R1']['Y'], data['T4R1']['T']
+
+# Filtrage
+threshold = 10
+mask1 = (x1 > threshold) & (y1 > threshold)
+mask2 = (x2 > threshold) & (y2 > threshold)
+mask3 = (x3 > threshold) & (y3 > threshold)
+
+x1f, y1f, t1f = x1[mask1], y1[mask1], t1[mask1]
+x2f, y2f, t2f = x2[mask2], y2[mask2], t2[mask2]
+x3f, y3f, t3f = x3[mask3], y3[mask3], t3[mask3]
+
+# Données combinées
+x_all = np.hstack((x1f, x2f, x3f))
+y_all = np.hstack((y1f, y2f, y3f))
+t_all = np.hstack((t1f, t2f, t3f))
+
+# Grille commune
+x_min, x_max = x_all.min(), x_all.max()
+y_min, y_max = y_all.min(), y_all.max()
+X, Y = np.meshgrid(np.linspace(x_min, x_max, 100),
+                   np.linspace(y_min, y_max, 100))
+
+# Interpolation combinée
+Z_all = griddata((x_all, y_all), t_all, (X, Y), method='linear', fill_value=t_all.min())
+Z1 = griddata((x1f, y1f), t1f, (X, Y), method='linear', fill_value=t_all.min())
+Z2 = griddata((x2f, y2f), t2f, (X, Y), method='linear', fill_value=t_all.min())
+Z3 = griddata((x3f, y3f), t3f, (X, Y), method='linear', fill_value=t_all.min())
+
+# Affichage de la carte combinée
+fig, ax = plt.subplots(figsize=(8, 6))
+cmap = 'inferno'
+norm = Normalize(vmin=t_all.min(), vmax=t_all.max())
+levels = np.linspace(t_all.min(), t_all.max(), 15)
+
+im = ax.imshow(Z_all, extent=(x_min, x_max, y_min, y_max), origin='lower', aspect='auto', cmap=cmap, norm=norm)
+ax.contour(X, Y, Z1, levels=levels, colors='white', linewidths=0.5)
+ax.contour(X, Y, Z2, levels=levels, colors='cyan', linewidths=0.5)
+ax.contour(X, Y, Z3, levels=levels, colors='yellow', linewidths=0.5)
+ax.set_xlabel('X (pixels)')
+ax.set_ylabel('Y (pixels)')
+fig.colorbar(im, ax=ax, label='Température (°C)')
+plt.title('Carte combinée (R1 + T2R1 + T3R1 + T4R1)')
+plt.tight_layout()
+plt.show()
+
+# Affichage des cartes séparées avec échelles propres
+def afficher_tuile(x, y, t, title):
+    x_min, x_max = x.min(), x.max()
+    y_min, y_max = y.min(), y.max()
+    X, Y = np.meshgrid(np.linspace(x_min, x_max, 100),
+                       np.linspace(y_min, y_max, 100))
+    Z = griddata((x, y), t, (X, Y), method='linear', fill_value=t.min())
+    levels = np.linspace(t.min(), t.max(), 15)
+    norm = Normalize(vmin=t.min(), vmax=t.max())
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(Z, extent=(x_min, x_max, y_min, y_max), origin='lower',
+                   aspect='auto', cmap='inferno', norm=norm)
+    ax.contour(X, Y, Z, levels=levels, colors='white', linewidths=0.5)
+    ax.set_title(title)
+    ax.set_xlabel('X (pixels)')
+    ax.set_ylabel('Y (pixels)')
+    fig.colorbar(im, ax=ax, label='Température (°C)')
+    plt.tight_layout()
+    plt.show()
+
+afficher_tuile(x1f, y1f, t1f, "Carte Tuile 1 : R1 + T2R1")
+afficher_tuile(x2f, y2f, t2f, "Carte Tuile 2 : T3R1")
+afficher_tuile(x3f, y3f, t3f, "Carte Tuile 3 : T4R1")
