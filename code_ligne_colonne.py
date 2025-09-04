@@ -2,11 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
-# Constante pour identifier le début des données, basée sur l'image.
+
 LIGNE_DEBUT_DONNEES = "______Output Data (Format for each row: index Number, scanning number, Waveform)______"
-# Nombre de pas de temps (longueur de la forme d'onde).
-# Basé sur "Waveform Length (pts): 811" dans l'image.
-# Si cela doit aussi être dynamique, il faudrait l'adapter.
+
 NOMBRE_PAS_TEMPS = 811
 
 def analyser_fichier_donnees_dynamique(chemin_fichier):
@@ -40,8 +38,7 @@ def analyser_fichier_donnees_dynamique(chemin_fichier):
 
                 elements = ligne_nettoyee.split()
                 
-                # Chaque ligne de données doit avoir au moins idx_ligne, idx_colonne et une valeur de forme d'onde.
-                # La longueur exacte de la forme d'onde est vérifiée par rapport à NOMBRE_PAS_TEMPS.
+
                 if len(elements) != 2 + NOMBRE_PAS_TEMPS:
                     if en_tete_trouve: # N'afficher les avertissements qu'après avoir trouvé l'en-tête
                         print(f"Info (Ligne {num_ligne_fichier} - Phase 1): La ligne ne correspond pas au format attendu "
@@ -166,7 +163,7 @@ def afficher_matrice_interactive(donnees_matrice):
     ax.set_ylabel(f"Indice de Ligne (0 à {num_lignes_mat - 1})")
     fig.colorbar(img_affichee, ax=ax, label='Valeur')
 
-    # Création du curseur pour naviguer dans le temps
+    # Création  curseur naviguer dans le temps
     ax_curseur_temps = plt.axes([0.20, 0.1, 0.65, 0.03]) # Position [gauche, bas, largeur, hauteur]
     curseur_temps = Slider(
         ax=ax_curseur_temps,
@@ -181,12 +178,7 @@ def afficher_matrice_interactive(donnees_matrice):
     def mettre_a_jour(val):
         temps_actuel = int(curseur_temps.val)
         img_affichee.set_data(donnees_matrice[:, :, temps_actuel])
-        # Optionnel: Mettre à jour les limites de couleur pour chaque slice si désiré
-        # vmin, vmax = np.min(donnees_matrice[:, :, temps_actuel]), np.max(donnees_matrice[:, :, temps_actuel])
-        # if vmin < vmax: # Évite l'erreur si toutes les valeurs sont identiques
-        #    img_affichee.set_clim(vmin=vmin, vmax=vmax)
-        # else: # Gère le cas où toutes les valeurs sont identiques
-        #    img_affichee.set_clim(vmin=vmin - 0.5, vmax=vmax + 0.5) # ou une autre logique appropriée
+
 
         ax.set_title(f"Matrice ({num_lignes_mat}x{num_colonnes_mat}) au pas de temps : {temps_actuel}")
         fig.canvas.draw_idle() # Redessine la figure
@@ -210,4 +202,5 @@ if __name__ == "__main__":
         else: # matrice_3d n'est pas None mais est vide (ex: np.zeros((0,0,811)))
             print("L'analyse a produit une matrice vide (taille 0). Vérifiez les messages précédents et le fichier de données.")
     else:
+
         print("Impossible d'afficher la matrice car les données n'ont pas pu être chargées ou traitées correctement.")
